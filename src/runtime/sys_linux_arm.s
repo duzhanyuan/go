@@ -121,6 +121,12 @@ TEXT runtime·exit1(SB),NOSPLIT,$-4
 	MOVW	$1003, R1
 	MOVW	R0, (R1)	// fail hard
 
+TEXT runtime·gettid(SB),NOSPLIT,$0-4
+	MOVW	$SYS_gettid, R7
+	SWI	$0
+	MOVW	R0, ret+0(FP)
+	RET
+
 TEXT	runtime·raise(SB),NOSPLIT,$-4
 	MOVW	$SYS_gettid, R7
 	SWI	$0
@@ -229,18 +235,16 @@ TEXT runtime·nanotime(SB),NOSPLIT,$32
 // int32 futex(int32 *uaddr, int32 op, int32 val,
 //	struct timespec *timeout, int32 *uaddr2, int32 val2);
 TEXT runtime·futex(SB),NOSPLIT,$0
-	// TODO: Rewrite to use FP references. Vet complains.
-	MOVW	4(R13), R0
-	MOVW	8(R13), R1
-	MOVW	12(R13), R2
-	MOVW	16(R13), R3
-	MOVW	20(R13), R4
-	MOVW	24(R13), R5
+	MOVW    addr+0(FP), R0
+	MOVW    op+4(FP), R1
+	MOVW    val+8(FP), R2
+	MOVW    ts+12(FP), R3
+	MOVW    addr2+16(FP), R4
+	MOVW    val3+20(FP), R5
 	MOVW	$SYS_futex, R7
 	SWI	$0
 	MOVW	R0, ret+24(FP)
 	RET
-
 
 // int32 clone(int32 flags, void *stack, M *mp, G *gp, void (*fn)(void));
 TEXT runtime·clone(SB),NOSPLIT,$0
@@ -254,9 +258,9 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	// Copy mp, gp, fn off parent stack for use by child.
 	// TODO(kaib): figure out which registers are clobbered by clone and avoid stack copying
 	MOVW	$-16(R1), R1
-	MOVW	mm+8(FP), R6
+	MOVW	mp+8(FP), R6
 	MOVW	R6, 0(R1)
-	MOVW	gg+12(FP), R6
+	MOVW	gp+12(FP), R6
 	MOVW	R6, 4(R1)
 	MOVW	fn+16(FP), R6
 	MOVW	R6, 8(R1)
@@ -279,8 +283,15 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	BEQ	2(PC)
 	BL	runtime·abort(SB)
 
-	MOVW	4(R13), g
-	MOVW	0(R13), R8
+	MOVW	0(R13), R8    // m
+	MOVW	4(R13), R0    // g
+
+	CMP	$0, R8
+	BEQ	nog
+	CMP	$0, R0
+	BEQ	nog
+
+	MOVW	R0, g
 	MOVW	R8, g_m(g)
 
 	// paranoia; check they are not nil
@@ -295,54 +306,18 @@ TEXT runtime·clone(SB),NOSPLIT,$0
 	MOVW	g_m(g), R8
 	MOVW	R0, m_procid(R8)
 
+nog:
 	// Call fn
 	MOVW	8(R13), R0
 	MOVW	$16(R13), R13
 	BL	(R0)
 
+	// It shouldn't return. If it does, exit that thread.
+	SUB	$16, R13 // restore the stack pointer to avoid memory corruption
 	MOVW	$0, R0
 	MOVW	R0, 4(R13)
 	BL	runtime·exit1(SB)
 
-	// It shouldn't return
-	MOVW	$1234, R0
-	MOVW	$1005, R1
-	MOVW	R0, (R1)
-
-// int32 clone0(int32 flags, void *stack, void* fn, void* fnarg);
-TEXT runtime·clone0(SB),NOSPLIT,$0-20
-	MOVW	flags+0(FP), R0
-	MOVW	stack+4(FP), R1
-	// Update child's future stack and save fn and fnarg on it.
-	MOVW	$-8(R1), R1
-	MOVW	fn+8(FP), R6
-	MOVW	R6, 0(R1)
-	MOVW	fnarg+12(FP), R6
-	MOVW	R6, 4(R1)
-	MOVW	$0, R2	// parent tid ptr
-	MOVW	$0, R3	// tls_val
-	MOVW	$0, R4	// child tid ptr
-	MOVW	$0, R5
-	MOVW	$SYS_clone, R7
-	SWI	$0
-
-	// In parent, return.
-	CMP	$0, R0
-	BEQ	3(PC)
-	MOVW	R0, ret+16(FP)
-	RET
-
-	// In child.
-	MOVW	0(R13), R6   // fn
-	MOVW	4(R13), R0   // fnarg
-	MOVW	$8(R13), R13
-	BL	(R6)
-
-	MOVW	$0, R0
-	MOVW	R0, 4(R13)
-	BL	runtime·exit1(SB)
-
-	// It shouldn't return
 	MOVW	$1234, R0
 	MOVW	$1005, R1
 	MOVW	R0, (R1)
@@ -358,7 +333,19 @@ TEXT runtime·sigaltstack(SB),NOSPLIT,$0
 	MOVW.HI	R8, (R8)
 	RET
 
-TEXT runtime·sigtramp(SB),NOSPLIT,$24
+TEXT runtime·sigfwd(SB),NOSPLIT,$0-16
+	MOVW	sig+4(FP), R0
+	MOVW	info+8(FP), R1
+	MOVW	ctx+12(FP), R2
+	MOVW	fn+0(FP), R11
+	MOVW	R13, R4
+	SUB	$24, R13
+	BIC	$0x7, R13 // alignment for ELF ABI
+	BL	(R11)
+	MOVW	R4, R13
+	RET
+
+TEXT runtime·sigtramp(SB),NOSPLIT,$12
 	// this might be called in external code context,
 	// where g is not set.
 	// first save R0, because runtime·load_g will clobber it
@@ -367,33 +354,15 @@ TEXT runtime·sigtramp(SB),NOSPLIT,$24
 	CMP 	$0, R0
 	BL.NE	runtime·load_g(SB)
 
-	CMP 	$0, g
-	BNE 	4(PC)
-	// signal number is already prepared in 4(R13)
-	MOVW  	$runtime·badsignal(SB), R11
+	MOVW	R1, 8(R13)
+	MOVW	R2, 12(R13)
+	MOVW  	$runtime·sigtrampgo(SB), R11
 	BL	(R11)
 	RET
 
-	// save g
-	MOVW	g, R3
-	MOVW	g, 20(R13)
-
-	// g = m->gsignal
-	MOVW	g_m(g), R8
-	MOVW	m_gsignal(R8), g
-
-	// copy arguments for call to sighandler
-	// R0 is already saved above
-	MOVW	R1, 8(R13)
-	MOVW	R2, 12(R13)
-	MOVW	R3, 16(R13)
-
-	BL	runtime·sighandler(SB)
-
-	// restore g
-	MOVW	20(R13), g
-
-	RET
+TEXT runtime·cgoSigtramp(SB),NOSPLIT,$0
+	MOVW  	$runtime·sigtramp(SB), R11
+	B	(R11)
 
 TEXT runtime·rtsigprocmask(SB),NOSPLIT,$0
 	MOVW	sig+0(FP), R0
@@ -416,10 +385,7 @@ TEXT runtime·rt_sigaction(SB),NOSPLIT,$0
 
 TEXT runtime·usleep(SB),NOSPLIT,$12
 	MOVW	usec+0(FP), R0
-	MOVW	R0, R1
-	MOVW	$1000000, R2
-	DIV	R2, R0
-	MOD	R2, R1
+	CALL	runtime·usplitR0(SB)
 	MOVW	R0, 4(R13)
 	MOVW	R1, 8(R13)
 	MOVW	$0, R0
@@ -431,34 +397,21 @@ TEXT runtime·usleep(SB),NOSPLIT,$12
 	SWI	$0
 	RET
 
-// Use kernel version instead of native armcas in asm_arm.s.
-// See ../sync/atomic/asm_linux_arm.s for details.
-TEXT cas<>(SB),NOSPLIT,$0
-	MOVW	$0xffff0fc0, R15 // R15 is hardware PC.
+// As for cas, memory barriers are complicated on ARM, but the kernel
+// provides a user helper. ARMv5 does not support SMP and has no
+// memory barrier instruction at all. ARMv6 added SMP support and has
+// a memory barrier, but it requires writing to a coprocessor
+// register. ARMv7 introduced the DMB instruction, but it's expensive
+// even on single-core devices. The kernel helper takes care of all of
+// this for us.
 
-TEXT runtime·cas(SB),NOSPLIT,$0
-	MOVW	ptr+0(FP), R2
-	MOVW	old+4(FP), R0
-loop:
-	MOVW	new+8(FP), R1
-	BL	cas<>(SB)
-	BCC	check
-	MOVW	$1, R0
-	MOVB	R0, ret+12(FP)
-	RET
-check:
-	// Kernel lies; double-check.
-	MOVW	ptr+0(FP), R2
-	MOVW	old+4(FP), R0
-	MOVW	0(R2), R3
-	CMP	R0, R3
-	BEQ	loop
-	MOVW	$0, R0
-	MOVB	R0, ret+12(FP)
-	RET
+TEXT publicationBarrier<>(SB),NOSPLIT,$0
+	// void __kuser_memory_barrier(void);
+	MOVW	$0xffff0fa0, R15 // R15 is hardware PC.
 
-TEXT runtime·casp1(SB),NOSPLIT,$0
-	B	runtime·cas(SB)
+TEXT ·publicationBarrier(SB),NOSPLIT,$0
+	BL	publicationBarrier<>(SB)
+	RET
 
 TEXT runtime·osyield(SB),NOSPLIT,$0
 	MOVW	$SYS_sched_yield, R7
@@ -537,7 +490,7 @@ TEXT runtime·access(SB),NOSPLIT,$0
 TEXT runtime·connect(SB),NOSPLIT,$0
 	MOVW	fd+0(FP), R0
 	MOVW	addr+4(FP), R1
-	MOVW	addrlen+8(FP), R2
+	MOVW	len+8(FP), R2
 	MOVW	$SYS_connect, R7
 	SWI	$0
 	MOVW	R0, ret+12(FP)
@@ -545,8 +498,8 @@ TEXT runtime·connect(SB),NOSPLIT,$0
 
 TEXT runtime·socket(SB),NOSPLIT,$0
 	MOVW	domain+0(FP), R0
-	MOVW	type+4(FP), R1
-	MOVW	protocol+8(FP), R2
+	MOVW	typ+4(FP), R1
+	MOVW	prot+8(FP), R2
 	MOVW	$SYS_socket, R7
 	SWI	$0
 	MOVW	R0, ret+12(FP)

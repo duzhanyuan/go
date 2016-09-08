@@ -20,7 +20,7 @@ type Buffer struct {
 	WriterTo   // conflicts with and hides bytes.Buffer's WriterTo.
 }
 
-// Simple tests, primarily to verify the ReadFrom and WriteTo callouts inside Copy and CopyN.
+// Simple tests, primarily to verify the ReadFrom and WriteTo callouts inside Copy, CopyBuffer and CopyN.
 
 func TestCopy(t *testing.T) {
 	rb := new(Buffer)
@@ -29,6 +29,26 @@ func TestCopy(t *testing.T) {
 	Copy(wb, rb)
 	if wb.String() != "hello, world." {
 		t.Errorf("Copy did not work properly")
+	}
+}
+
+func TestCopyBuffer(t *testing.T) {
+	rb := new(Buffer)
+	wb := new(Buffer)
+	rb.WriteString("hello, world.")
+	CopyBuffer(wb, rb, make([]byte, 1)) // Tiny buffer to keep it honest.
+	if wb.String() != "hello, world." {
+		t.Errorf("CopyBuffer did not work properly")
+	}
+}
+
+func TestCopyBufferNil(t *testing.T) {
+	rb := new(Buffer)
+	wb := new(Buffer)
+	rb.WriteString("hello, world.")
+	CopyBuffer(wb, rb, nil) // Should allocate a buffer.
+	if wb.String() != "hello, world." {
+		t.Errorf("CopyBuffer did not work properly")
 	}
 }
 
@@ -327,7 +347,7 @@ func TestSectionReader_Seek(t *testing.T) {
 	br := bytes.NewReader([]byte("foo"))
 	sr := NewSectionReader(br, 0, int64(len("foo")))
 
-	for whence := 0; whence <= 2; whence++ {
+	for _, whence := range []int{SeekStart, SeekCurrent, SeekEnd} {
 		for offset := int64(-3); offset <= 4; offset++ {
 			brOff, brErr := br.Seek(offset, whence)
 			srOff, srErr := sr.Seek(offset, whence)
@@ -339,7 +359,7 @@ func TestSectionReader_Seek(t *testing.T) {
 	}
 
 	// And verify we can just seek past the end and get an EOF
-	got, err := sr.Seek(100, 0)
+	got, err := sr.Seek(100, SeekStart)
 	if err != nil || got != 100 {
 		t.Errorf("Seek = %v, %v; want 100, nil", got, err)
 	}

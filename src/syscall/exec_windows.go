@@ -209,8 +209,6 @@ func joinExeDirAndFName(dir, p string) (name string, err error) {
 			return FullPath(d + "\\" + p)
 		}
 	}
-	// we shouldn't be here
-	return "", EINVAL
 }
 
 type ProcAttr struct {
@@ -243,6 +241,9 @@ func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle 
 
 	if len(attr.Files) > 3 {
 		return 0, 0, EWINDOWS
+	}
+	if len(attr.Files) < 3 {
+		return 0, 0, EINVAL
 	}
 
 	if len(attr.Dir) != 0 {

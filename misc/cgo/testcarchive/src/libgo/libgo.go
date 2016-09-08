@@ -5,9 +5,12 @@
 package main
 
 import (
-	_ "p"
+	"fmt"
+	"os"
 	"syscall"
 	"time"
+
+	_ "p"
 )
 
 import "C"
@@ -40,3 +43,11 @@ func DidInitRun() bool {
 
 //export DidMainRun
 func DidMainRun() bool { return ranMain }
+
+//export CheckArgs
+func CheckArgs() {
+	if len(os.Args) != 3 || os.Args[1] != "arg1" || os.Args[2] != "arg2" {
+		fmt.Printf("CheckArgs: want [_, arg1, arg2], got: %v\n", os.Args)
+		os.Exit(2)
+	}
+}

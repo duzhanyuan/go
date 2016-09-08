@@ -5,6 +5,8 @@
 package main
 
 import (
+	"go/build"
+	"internal/testenv"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -15,15 +17,7 @@ import (
 )
 
 func buildObjdump(t *testing.T) (tmp, exe string) {
-	switch runtime.GOOS {
-	case "android", "nacl":
-		t.Skipf("skipping on %s", runtime.GOOS)
-	case "darwin":
-		switch runtime.GOARCH {
-		case "arm", "arm64":
-			t.Skipf("skipping on %s/%s, cannot fork", runtime.GOOS, runtime.GOARCH)
-		}
-	}
+	testenv.MustHaveGoBuild(t)
 
 	tmp, err := ioutil.TempDir("", "TestObjDump")
 	if err != nil {
@@ -31,7 +25,7 @@ func buildObjdump(t *testing.T) (tmp, exe string) {
 	}
 
 	exe = filepath.Join(tmp, "testobjdump.exe")
-	out, err := exec.Command("go", "build", "-o", exe, "cmd/objdump").CombinedOutput()
+	out, err := exec.Command(testenv.GoToolPath(t), "build", "-o", exe, "cmd/objdump").CombinedOutput()
 	if err != nil {
 		os.RemoveAll(tmp)
 		t.Fatalf("go build -o %v cmd/objdump: %v\n%s", exe, err, string(out))
@@ -72,7 +66,7 @@ func testDisasm(t *testing.T, flags ...string) {
 	args := []string{"build", "-o", hello}
 	args = append(args, flags...)
 	args = append(args, "testdata/fmthello.go")
-	out, err := exec.Command("go", args...).CombinedOutput()
+	out, err := exec.Command(testenv.GoToolPath(t), args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("go build fmthello.go: %v\n%s", err, out)
 	}
@@ -111,6 +105,10 @@ func TestDisasm(t *testing.T) {
 		t.Skipf("skipping on %s, issue 9039", runtime.GOARCH)
 	case "arm64":
 		t.Skipf("skipping on %s, issue 10106", runtime.GOARCH)
+	case "mips64", "mips64le":
+		t.Skipf("skipping on %s, issue 12559", runtime.GOARCH)
+	case "s390x":
+		t.Skipf("skipping on %s, issue 15255", runtime.GOARCH)
 	}
 	testDisasm(t)
 }
@@ -125,6 +123,17 @@ func TestDisasmExtld(t *testing.T) {
 		t.Skipf("skipping on %s, no support for external linking, issue 9038", runtime.GOARCH)
 	case "arm64":
 		t.Skipf("skipping on %s, issue 10106", runtime.GOARCH)
+	case "mips64", "mips64le":
+		t.Skipf("skipping on %s, issue 12559 and 12560", runtime.GOARCH)
+	case "s390x":
+		t.Skipf("skipping on %s, issue 15255", runtime.GOARCH)
+	}
+	// TODO(jsing): Reenable once openbsd/arm has external linking support.
+	if runtime.GOOS == "openbsd" && runtime.GOARCH == "arm" {
+		t.Skip("skipping on openbsd/arm, no support for external linking, issue 10619")
+	}
+	if !build.Default.CgoEnabled {
+		t.Skip("skipping because cgo is not enabled")
 	}
 	testDisasm(t, "-ldflags=-linkmode=external")
 }

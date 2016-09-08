@@ -7,6 +7,7 @@
 package race_test
 
 import (
+	"internal/testenv"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -41,7 +42,7 @@ func TestOutput(t *testing.T) {
 			t.Fatalf("failed to close file: %v", err)
 		}
 		// Pass -l to the compiler to test stack traces.
-		cmd := exec.Command("go", test.run, "-race", "-gcflags=-l", src)
+		cmd := exec.Command(testenv.GoToolPath(t), test.run, "-race", "-gcflags=-l", src)
 		// GODEBUG spoils program output, GOMAXPROCS makes it flaky.
 		for _, env := range os.Environ() {
 			if strings.HasPrefix(env, "GODEBUG=") ||
@@ -51,7 +52,10 @@ func TestOutput(t *testing.T) {
 			}
 			cmd.Env = append(cmd.Env, env)
 		}
-		cmd.Env = append(cmd.Env, "GORACE="+test.gorace)
+		cmd.Env = append(cmd.Env,
+			"GOMAXPROCS=1", // see comment in race_test.go
+			"GORACE="+test.gorace,
+		)
 		got, _ := cmd.CombinedOutput()
 		if !regexp.MustCompile(test.re).MatchString(string(got)) {
 			t.Fatalf("failed test case %v, expect:\n%v\ngot:\n%s",
@@ -90,13 +94,13 @@ func racer(x *int, done chan bool) {
 }
 `, `==================
 WARNING: DATA RACE
-Write by goroutine [0-9]:
+Write at 0x[0-9,a-f]+ by goroutine [0-9]:
   main\.store\(\)
       .+/main\.go:12 \+0x[0-9,a-f]+
   main\.racer\(\)
       .+/main\.go:19 \+0x[0-9,a-f]+
 
-Previous write by main goroutine:
+Previous write at 0x[0-9,a-f]+ by main goroutine:
   main\.store\(\)
       .+/main\.go:12 \+0x[0-9,a-f]+
   main\.main\(\)
@@ -177,4 +181,21 @@ func TestFail(t *testing.T) {
 PASS
 Found 1 data race\(s\)
 FAIL`},
+
+	{"slicebytetostring_pc", "run", "atexit_sleep_ms=0", `
+package main
+func main() {
+	done := make(chan string)
+	data := make([]byte, 10)
+	go func() {
+		done <- string(data)
+	}()
+	data[0] = 1
+	<-done
+}
+`, `
+  runtime\.slicebytetostring\(\)
+      .*/runtime/string\.go:.*
+  main\.main\.func1\(\)
+      .*/main.go:7`},
 }

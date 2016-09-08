@@ -12,13 +12,16 @@ import (
 	"io"
 )
 
-const hextable = "0123456789abcdef"
+var hextable = [16]byte{
+	'0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+	'a', 'b', 'c', 'd', 'e', 'f',
+}
 
 // EncodedLen returns the length of an encoding of n source bytes.
 func EncodedLen(n int) int { return n * 2 }
 
 // Encode encodes src into EncodedLen(len(src))
-// bytes of dst.  As a convenience, it returns the number
+// bytes of dst. As a convenience, it returns the number
 // of bytes written to dst, but this value is always EncodedLen(len(src)).
 // Encode implements hexadecimal encoding.
 func Encode(dst, src []byte) int {
@@ -105,7 +108,7 @@ func Dump(data []byte) string {
 	dumper := Dumper(&buf)
 	dumper.Write(data)
 	dumper.Close()
-	return string(buf.Bytes())
+	return buf.String()
 }
 
 // Dumper returns a WriteCloser that writes a hex dump of all written data to
